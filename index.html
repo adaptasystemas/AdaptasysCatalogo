@@ -538,11 +538,12 @@ function authEmail(v){
   return d.length>=12&&d.length<=13?d+FAKE:'';
 }
 let user=null,am='up';
-/* CADASTRO OBRIGATÓRIO: nome, WhatsApp, endereço completo e a localização real (GPS) */
+/* CADASTRO OBRIGATÓRIO: nome, WhatsApp e endereço. A localização (GPS) é opcional e não trava o pedido */
 const CADASTRO_OBRIGATORIO=true;
-const perfilOk=m=>!!(m&&m.n&&digits(m.t).length>=10&&m.rua&&m.num&&m.bai&&m.cid&&m.loc&&isFinite(m.loc.lat)&&isFinite(m.loc.lng));
+/* SIMPLES: só nome, WhatsApp e endereço escrito são obrigatórios. A localização no mapa ajuda o entregador, mas NUNCA trava o pedido. */
+const perfilOk=m=>!!(m&&m.n&&digits(m.t).length>=10&&m.rua&&m.num&&m.bai&&m.cid);
 const bloqueado=()=>CADASTRO_OBRIGATORIO&&CFG&&!!sb&&!perfilOk(me);
-const faltaPerfil=m=>{m=m||{};const f=[];if(!m.n)f.push('nome');if(digits(m.t).length<10)f.push('WhatsApp com DDD');if(!m.rua)f.push('rua');if(!m.num)f.push('número da casa (ou S/N)');if(!m.bai)f.push('bairro');if(!m.cid)f.push('cidade');if(!(m.loc&&isFinite(m.loc.lat)))f.push('localização (toque em 📍 Encontrar meu endereço)');else if(m.loc.ok===false)f.push('confirmar no mapa que o pino está na sua casa');return f};
+const faltaPerfil=m=>{m=m||{};const f=[];if(!m.n)f.push('nome');if(digits(m.t).length<10)f.push('WhatsApp com DDD');if(!m.rua)f.push('rua');if(!m.num)f.push('número da casa (ou S/N)');if(!m.bai)f.push('bairro');if(!m.cid)f.push('cidade');return f};
 const wz=i=>{$('#aw').hidden=!i.value.includes('@')};
 const instTip='<p class="mu">Para instalar o app: no Android toque em "Instalar app" no topo; no iPhone toque em Compartilhar e depois em Adicionar à Tela de Início.</p>';
 const locBtn=`<button class="b w gpsb" onclick="gpsFill(r=>{cLoc=r.loc;fillAddr(r);mapaMostra(cLoc)})">📍 Encontrar meu endereço</button><p class="mu" style="margin:6px 0 0;font-size:13px">Use o GPS do celular e depois confirme no mapa (satélite) que o pino está na sua casa. Assim a entrega chega no lugar certo.</p><div id="mapa" class="mapa" hidden></div>`;
@@ -723,6 +724,7 @@ async function init(){
     }
     return loginView();
   }
+  const gret=await oauthRetorno();if(gret)ses=await getSes();
   if(ses){user=ses.user;const {data:ok}=await sb.rpc('sou_admin');isAdmin=!!ok}
   CUST=true;tab='loja';me=null;
   const ipr=await ipRetorno();
@@ -731,6 +733,8 @@ async function init(){
   render();await loadProducts();if(user)await loadMe();
   // o cliente pode olhar os produtos e montar o carrinho antes do cadastro; o cadastro é pedido ao enviar o pedido
   if(ipr&&user&&!bloqueado()){tab='meus'}
+  if(gret){if(!me){tab='eu';render();return toastMsg('Entrou com o Google. Complete o cadastro (uma vez só).')}
+    toastMsg(gret=='ligado'?'✅ Cadastro salvo no Google. Em outro celular é só "Entrar com Google".':'✅ Bem-vindo de volta, '+String(me.n||'').split(' ')[0]+'!');if(items().length&&!bloqueado())tab='cart'}
   render();
 }
 /* volta da página de pagamento da InfinitePay: anota os códigos no pedido; quem confirma é a loja */
@@ -1047,8 +1051,38 @@ function setBai(nome,forcar){
   s.value=o;i.value=o;i.hidden=true;return true;
 }
 /* endereço pelo ponto: 1º os vizinhos que já confirmaram o endereço (banco da loja), depois o mapa público */
+/* rua mais próxima do ponto (OpenStreetMap/Overpass): mede a distância até cada rua com nome num raio de 80 m.
+   Em cidade pequena o endereço do mapa às vezes vem sem rua ou com a avenida principal; isto pega a rua da porta. */
+async function ruaProxima(lat,lng){
+  const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),8000);
+  try{
+    const q=`[out:json][timeout:8];way(around:80,${lat},${lng})[highway][name];out tags geom;`;
+    const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:'data='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ac.signal});
+    if(!r.ok)return [];
+    const j=await r.json(),kx=111320*Math.cos(lat*Math.PI/180),ky=110540,out={};
+    for(const w of j.elements||[]){
+      const g=w.geometry||[],nm=(w.tags||{}).name;if(!nm||g.length<1)continue;
+      let best=1e9;
+      for(let i=0;i<g.length;i++){
+        const ax=(g[i].lon-lng)*kx,ay=(g[i].lat-lat)*ky;
+        if(i==g.length-1){best=Math.min(best,Math.hypot(ax,ay));break}
+        const bx=(g[i+1].lon-lng)*kx,by=(g[i+1].lat-lat)*ky,dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy;
+        let t=L?-(ax*dx+ay*dy)/L:0;t=Math.max(0,Math.min(1,t));best=Math.min(best,Math.hypot(ax+t*dx,ay+t*dy));
+      }
+      if(!(nm in out)||best<out[nm])out[nm]=best;
+    }
+    return Object.entries(out).map(([name,d])=>({name,d})).sort((a,b)=>a.d-b.d);
+  }catch(e){return []}finally{clearTimeout(tm)}
+}
 async function endSug(lat,lng){
-  let r={};try{r=await revGeo(lat,lng)}catch(e){}
+  let r={},ov=[];
+  await Promise.all([revGeo(lat,lng).then(x=>r=x||{}).catch(()=>{}),ruaProxima(lat,lng).then(x=>ov=x).catch(()=>{})]);
+  if(ov.length){
+    const n0=ov[0],dele=r.rua&&ov.find(x=>norm(x.name)==norm(r.rua));
+    // o mapa não deu rua, ou deu uma rua bem mais longe que a mais próxima: fica a mais próxima
+    if(!r.rua||!dele||(dele.d-n0.d>12&&n0.d<35)){r.rua=n0.name;r.rua_d=Math.round(n0.d)}else r.rua_d=Math.round(dele.d);
+    r.ok=true;
+  }
   try{if(sb&&!(await getSes()))await sb.auth.signInAnonymously()}catch(e){}   // cadastro sem senha: o acesso já nasce aqui
   try{if(sb){const {data}=await sb.rpc('sugerir_endereco',{p_lat:lat,p_lng:lng});if(data){if(data.rua&&(data.rua_m<=40||!r.rua))r.rua=data.rua;if(data.bai)r.bai2=data.bai}}}catch(e){}
   return r;
@@ -1057,10 +1091,53 @@ const readAddr=()=>{const g=i=>($('#'+i)?$('#'+i).value:'').trim(),f={rua:g('f-r
 /* CADASTRO SEM SENHA: o app cria uma conta só deste celular (login anônimo do Supabase) e fica
    sempre conectado. Não existe "entrar com o WhatsApp": senão qualquer um que soubesse o número
    veria o endereço e os pedidos de outra pessoa. Trocou de celular = cadastro novo. */
+/* ===== ENTRAR COM GOOGLE: o cadastro fica ligado à conta Google e volta em qualquer celular ===== */
+const googleOn=()=>!!(EMP&&EMP.google&&sb);
+const GSVG='<svg viewBox="0 0 48 48" width="20" height="20" style="vertical-align:-4px;margin-right:6px"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>';
+const temGoogle=u=>!!(u&&(u.identities||[]).some(i=>i.provider=='google'));
+const gVolta=()=>location.origin+location.pathname;
+async function googleEntrar(){
+  if(!sb)return alert('Sem conexão. Tente de novo com internet.');
+  try{sessionStorage.setItem('mo-goog','entrar')}catch(e){}
+  const {error}=await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:gVolta(),queryParams:{prompt:'select_account'}}});
+  if(error)alert(googleErro(error.message));
+}
+async function googleSalvar(){
+  if(!sb)return alert('Sem conexão. Tente de novo com internet.');
+  try{sessionStorage.setItem('mo-goog','ligar')}catch(e){}
+  const {error}=await sb.auth.linkIdentity({provider:'google',options:{redirectTo:gVolta(),queryParams:{prompt:'select_account'}}});
+  if(error)alert(googleErro(error.message));
+}
+function googleErro(m){m=String(m||'');
+  if(/not enabled|unsupported provider/i.test(m))return 'O login com Google ainda não está ligado nesta loja. Avise a loja.';
+  if(/manual linking/i.test(m))return 'A loja precisa ligar "Allow manual linking" no Supabase para salvar o cadastro com Google. Avise a loja.';
+  return 'Não foi possível usar o Google agora: '+m}
+/* volta do Google: a sessão vem no endereço (#access_token=...) */
+async function oauthRetorno(){
+  if(!sb)return '';
+  const h=new URLSearchParams(location.hash.replace(/^#/,'')),q=new URLSearchParams(location.search);
+  const modo=(()=>{try{const m=sessionStorage.getItem('mo-goog');sessionStorage.removeItem('mo-goog');return m}catch(e){return ''}})();
+  const limpa=()=>history.replaceState(null,'',location.pathname+(q.has('pwa')?'?pwa=1':''));
+  if(h.get('access_token')&&h.get('refresh_token')){
+    const {error}=await sb.auth.setSession({access_token:h.get('access_token'),refresh_token:h.get('refresh_token')});limpa();
+    if(error){alert('Não foi possível entrar com o Google: '+error.message);return ''}
+    return modo=='ligar'?'ligado':'entrou';
+  }
+  const err=h.get('error_description')||q.get('error_description');
+  if(err){limpa();
+    if(modo=='ligar'&&/already|exists|linked/i.test(err)){
+      if(confirm('Esta conta Google já tem um cadastro nesta loja (de outro celular).\n\nEntrar nele agora? O carrinho continua guardado.'))googleEntrar();
+      return '';
+    }
+    alert(googleErro(decodeURIComponent(err.replace(/\+/g,' '))));
+  }
+  return '';
+}
 function vEu(){
   if(user)return vPerfil();
   if(cLoc)setTimeout(()=>mapaMostra(cLoc),60);
-  return `${bloqueado()?`<div class="card bemv"><b>Bem-vindo ao ${esc(EMP.n)}!</b><br>${items().length?'Falta só o seu cadastro para enviar o pedido. O carrinho fica guardado.':'Faça seu cadastro para pedir. Não precisa de senha: é só uma vez.'}</div>`:''}<div class="card"><h2>Seu cadastro</h2>
+  const gEnt=googleOn()?`<div class="card" style="text-align:center"><b>Já tem cadastro nesta loja?</b><p class="mu" style="margin:4px 0 10px">Se você salvou o cadastro com o Google, entre e ele volta inteiro: endereço e pedidos.</p><button class="b s w" onclick="googleEntrar()">${GSVG}Entrar com Google</button></div>`:'';
+  return gEnt+`${bloqueado()?`<div class="card bemv"><b>Bem-vindo ao ${esc(EMP.n)}!</b><br>${items().length?'Falta só o seu cadastro para enviar o pedido. O carrinho fica guardado.':'Faça seu cadastro para pedir. Não precisa de senha: é só uma vez.'}</div>`:''}<div class="card"><h2>Seu cadastro</h2>
   <label>Nome completo *</label><input id="an" autocomplete="name">
   <label>WhatsApp com DDD *</label><input id="at" type="tel" inputmode="tel" autocomplete="tel" placeholder="(93) 99999-9999">
   <label>E-mail <small class="mu">(opcional)</small></label><input id="ae" type="email" inputmode="email" autocomplete="email" placeholder="nome@email.com">
@@ -1068,8 +1145,9 @@ function vEu(){
   <button class="b w" onclick="criarConta()">Começar a comprar</button></div>${isStandalone()?'':instTip}`;
 }
 function vPerfil(){
-  const m=me||{},l=cLoc||m.loc;
+  const md=(user&&user.user_metadata)||{},m=me||{n:md.full_name||md.name||'',e:(user&&!user.is_anonymous&&user.email)||''},l=cLoc||m.loc;
   const fl=faltaPerfil(me);if(l)setTimeout(()=>mapaMostra(l),60);
+  const gCard=googleOn()&&!temGoogle(user)?`<div class="card"><b>🔒 Não perca seu cadastro (opcional)</b><p class="mu" style="margin:4px 0 10px">Ligue seu cadastro à sua conta Google. Se trocar de celular ou reinstalar o app, é só tocar em "Entrar com Google" e tudo volta: endereço e pedidos.</p><button class="b w" onclick="googleSalvar()">${GSVG}Salvar meu cadastro com Google</button></div>`:'';
   return `<div class="card"><h2>Minha conta</h2>${fl.length?`<p class="falta">Para fazer pedidos, complete: <b>${fl.join(', ')}</b>.</p>`:''}
   <label>Nome</label><input id="mn" value="${esc(m.n)}" autocomplete="name">
   <label>WhatsApp com DDD *</label><input id="mt" type="tel" inputmode="tel" value="${esc(m.t)}" autocomplete="tel">
@@ -1077,14 +1155,15 @@ function vPerfil(){
   <h2 style="margin-top:14px">Endereço de entrega</h2>
   ${locBtn}<p id="cl" class="mu">${l?'📍 '+l.lat+', '+l.lng+(l.acc?' (±'+l.acc+' m)':''):''}</p>
   ${addrFields(m)}
-  <button class="b w" onclick="saveMe()">Salvar cadastro</button></div>
+  <button class="b w" onclick="saveMe()">Salvar cadastro</button></div>${gCard}
+  ${temGoogle(user)?`<p class="mu" style="text-align:center;font-size:13.5px">✅ Cadastro salvo no Google${user.email?' ('+esc(user.email)+')':''}. Em outro celular, toque em "Entrar com Google".</p>`:''}
   ${user&&user.is_anonymous===false?'<button class="d" onclick="sair()">Sair da conta</button>':'<p class="mu" style="text-align:center;font-size:13px">Seu cadastro fica guardado neste celular. Não precisa de senha.</p>'}`;
 }
 async function criarConta(){
   if(!sb)return alert('Sem conexão. Tente de novo com internet.');
   const n=$('#an').value.trim(),tel=$('#at').value.trim(),e=$('#ae').value.trim().toLowerCase(),f=readAddr();
   const fl=faltaPerfil({n,t:tel,...f,loc:cLoc});
-  if(fl.length)return alert('Para continuar, preencha: '+fl.join(', ')+'.');
+  if(fl.length){alert('Para continuar, falta: '+fl.join(', ')+'.');return irConf(fl)}
   if(e&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))return alert('O e-mail parece incompleto. Corrija ou deixe em branco.');
   let ses=await getSes();
   if(!ses){
@@ -1093,22 +1172,24 @@ async function criarConta(){
     ses=data.session;
   }
   user=ses.user;
-  me={id:user.id,n,t:tel,e,rua:f.rua,num:f.num,bai:f.bai,cid:f.cid,ref:f.ref,a:f.a,loc:cLoc||null,date:new Date().toISOString()};
+  me={id:user.id,n,t:tel,e,rua:f.rua,num:f.num,bai:f.bai,cid:f.cid,ref:f.ref,a:f.a,loc:cLoc?{...cLoc,ok:true}:null,date:new Date().toISOString()};
   const r=await sb.from('clients').upsert({id:me.id,data:me});
   if(r.error){me=null;return alert('O cadastro não foi salvo: '+r.error.message)}
   cLoc=null;toastMsg('✅ Cadastro feito! Boas compras.');go(items().length?'cart':'loja');
 }
+function irConf(fl){if(fl.some(x=>/confirmar no mapa/.test(x))){confBox();const b=$('#mconf');if(b)b.scrollIntoView({behavior:'smooth',block:'center'})}}
 async function saveMe(){
   const n=$('#mn').value.trim(),t=$('#mt').value.trim(),e=($('#me2')?$('#me2').value:'').trim().toLowerCase(),f=readAddr();
   if(e&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))return alert('O e-mail parece incompleto. Corrija ou deixe em branco.');
-  const fl=faltaPerfil({n,t,...f,loc:cLoc||(me&&me.loc)});if(fl.length)return alert('Para salvar, preencha: '+fl.join(', ')+'.');
-  const m={...(me||{}),id:user.id,n,t,e,rua:f.rua,num:f.num,bai:f.bai,cid:f.cid,ref:f.ref,a:f.a,loc:cLoc||(me&&me.loc)||null,date:(me&&me.date)||new Date().toISOString()};
+  const fl=faltaPerfil({n,t,...f,loc:cLoc||(me&&me.loc)});if(fl.length){alert('Para salvar, falta: '+fl.join(', ')+'.');return irConf(fl)}
+  const lc=cLoc||(me&&me.loc)||null;
+  const m={...(me||{}),id:user.id,n,t,e,rua:f.rua,num:f.num,bai:f.bai,cid:f.cid,ref:f.ref,a:f.a,loc:lc?{...lc,ok:true}:null,date:(me&&me.date)||new Date().toISOString()};
   const {error}=await sb.from('clients').upsert({id:m.id,data:m});
   if(error)return alert('Não foi possível salvar o cadastro: '+error.message);
   me=m;cLoc=null;alert('Cadastro salvo!');go(items().length?'cart':'loja');
 }
 function fillAddr(r){
-  const p=$('#cl');if(p)p.textContent='📍 '+r.loc.lat+', '+r.loc.lng+(r.loc.acc?' (±'+r.loc.acc+' m)':'');
+  const p=$('#cl');if(p)p.textContent='📍 '+(r.rua?r.rua+(r.rua_d!=null?' (a '+r.rua_d+' m do ponto)':'')+' · ':'')+'precisão ±'+(r.loc.acc||'?')+' m';
   const set=(id,v)=>{const e=$('#'+id);if(e&&v)e.value=v};
   if($('#f-rua')){set('f-rua',r.rua);set('f-num',r.num);if(!setBai(r.bai2,true)&&!setBai(r.bai,true)&&!$('#f-bai-s'))set('f-bai',r.bai2||r.bai);set('f-cid',r.cid)}
   else{const t=$('#ca');if(t&&r.addr)t.value=r.addr}
@@ -1125,12 +1206,16 @@ let LMAP=null,LMK=null,leafletP=null;
 function leaflet(){
   if(window.L&&L.map)return Promise.resolve();
   return leafletP||(leafletP=new Promise((ok,no)=>{
-    const c=document.createElement('link');c.rel='stylesheet';c.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';document.head.appendChild(c);
-    const j=document.createElement('script');j.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';j.onload=ok;j.onerror=()=>{leafletP=null;no()};document.head.appendChild(j)}));
+    // dois endereços (se um estiver fora do ar ou bloqueado na rede do cliente, usa o outro)
+    const F=[['https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css','https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'],['https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css','https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js']];
+    const tenta=i=>{if(i>=F.length){leafletP=null;return no()}
+      const c=document.createElement('link');c.rel='stylesheet';c.href=F[i][0];document.head.appendChild(c);
+      const j=document.createElement('script');j.src=F[i][1];j.onload=()=>window.L&&L.map?ok():tenta(i+1);j.onerror=()=>{j.remove();tenta(i+1)};document.head.appendChild(j)};
+    tenta(0)}));
 }
 async function mapaMostra(loc){
   const d=$('#mapa');if(!d||!loc)return;d.hidden=false;
-  try{await leaflet()}catch(e){d.style.height='auto';d.innerHTML=`<a class="b s w" target="_blank" rel="noopener" href="${mapUrl(loc)}">Ver no mapa</a>`;return}
+  try{await leaflet()}catch(e){d.style.height='auto';d.innerHTML=`<a class="b s w" target="_blank" rel="noopener" href="${mapUrl(loc)}">Ver no mapa</a><p class="mu" style="margin:6px 0 0;font-size:13px">O mapa não abriu aqui (internet fraca). Toque em "Ver no mapa" para conferir e depois confirme abaixo.</p>`;confBox();return}
   if(LMAP){try{LMAP.remove()}catch(e){}LMAP=null}
   const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,maxNativeZoom:18,attribution:'Imagens © Esri'});
   const rua=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,maxNativeZoom:19,attribution:'© OpenStreetMap'});
@@ -1142,6 +1227,7 @@ async function mapaMostra(loc){
     const nl={lat:+ll.lat.toFixed(6),lng:+ll.lng.toFixed(6),acc:3,manual:true,ok:true};cLoc=nl;LMK.setLatLng(ll);if(circ)LMAP.removeLayer(circ);
     const c=$('#cl');if(c)c.textContent='📍 Marcado no mapa por você ('+nl.lat+', '+nl.lng+')';confBox();
     let r={};try{r=await endSug(nl.lat,nl.lng)}catch(e){}
+    if(c&&r.rua)c.textContent='📍 Marcado no mapa por você · '+r.rua+(r.rua_d!=null?' (a '+r.rua_d+' m)':'');
     const set=(id,v)=>{const e=$('#'+id);if(e&&v&&!e.dataset.mexeu)e.value=v};set('f-rua',r.rua);if(!setBai(r.bai2)&&!setBai(r.bai)&&!$('#f-bai-s'))set('f-bai',r.bai2||r.bai);set('f-cid',r.cid);
   };
   LMK.on('dragend',()=>mover(LMK.getLatLng()));

@@ -105,12 +105,12 @@ function card(o){
   const ent=o.st=='ent';
   return `<div class="card"><div class="top"><div><div class="nm">${esc(o.cn||'Cliente')}</div><span class="mu">#${esc(String(o.id).slice(-4).toUpperCase())} · ${new Date(o.date).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} · ${o.itens} ite${o.itens==1?'m':'ns'}</span></div>
    ${ent?'<span class="tag ok">✓ Entregue</span>':meu?'<span class="tag ac">🛵 Com você</span>':outro?`<span class="tag wn">Com ${esc(o.rota.nome)}</span>`:o.fat?'<span class="tag ok">Pronto para sair</span>':'<span class="tag wn">Separando na loja</span>'}</div>
-   <div class="end">📍 ${esc(o.addr||'')}</div>${o.bairro?`<div class="mu" style="font-weight:700">Bairro ${esc(o.bairro)}</div>`:''}
+   <div class="end">📍 ${esc(o.addr||'')}</div>${l?`<div class="mu" style="font-size:13px;font-weight:700;color:var(--ok)">✓ Localização marcada pelo cliente no mapa${l.acc?' (±'+l.acc+' m)':''}: a rota leva até a porta</div>`:'<div class="mu" style="font-size:13px">Sem localização no mapa: a rota usa o endereço escrito.</div>'}${o.bairro?`<div class="mu" style="font-weight:700">Bairro ${esc(o.bairro)}</div>`:''}
    ${o.ref||o.obs?`<div class="ref">${o.ref?'🏠 '+esc(o.ref):''}${o.ref&&o.obs?'<br>':''}${o.obs?'📝 '+esc(o.obs):''}</div>`:''}
    ${coletas(o)}
    ${ent?`<p class="mu" style="margin:6px 0 0">Entregue às ${new Date(o.entregue.date).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} · ${R(o.total)} (${esc(o.pay)})</p>`:pagto(o)}
    ${ent?'':`<div class="bts">
-     ${l?`<a class="b" href="https://www.google.com/maps/dir/?api=1&destination=${l.lat},${l.lng}&travelmode=driving" target="_blank" rel="noopener">🗺️ Rota</a><a class="b s" href="https://waze.com/ul?ll=${l.lat},${l.lng}&navigate=yes" target="_blank" rel="noopener">Waze</a>`:`<a class="b w" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((o.addr||'')+' '+(o.bairro||''))}" target="_blank" rel="noopener">🗺️ Procurar endereço</a>`}
+     ${l?`<a class="b" href="${(()=>{const st=paradas(o);return gm(st[st.length-1],st.slice(0,-1))})()}" target="_blank" rel="noopener">🗺️ Rota</a><a class="b s" href="https://waze.com/ul?ll=${l.lat},${l.lng}&navigate=yes" target="_blank" rel="noopener">Waze</a>`:`<a class="b w" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((o.addr||'')+' '+(o.bairro||''))}" target="_blank" rel="noopener">🗺️ Procurar endereço</a>`}
      ${tel?`<a class="b s" href="tel:${tel}">📞 Ligar</a><a class="b s" href="https://wa.me/${wa}" target="_blank" rel="noopener">💬 WhatsApp</a>`:''}
      ${outro?'':meu?`<button class="b s" onclick="soltar('${o.id}')">Não vou levar</button><button class="b ok" onclick="entregar('${o.id}')">✅ Entregue</button>`:`<button class="b w" onclick="pegar('${o.id}')">🛵 Vou levar este</button>`}
    </div>`}
@@ -137,9 +137,40 @@ function desenhar(){
   $('#t1').textContent='Entregar ('+fila.length+')';$('#t2').textContent='Hoje ('+feitas.length+')';
   if(aba=='ganhos'){$('#m').innerHTML=ganhos();return}
   const l=aba=='fila'?fila:feitas;
-  $('#m').innerHTML=(aba=='feitas'?resumo():'')+(l.length?l.map(card).join(''):`<div class="vazio"><div>${aba=='fila'?'😴':'📦'}</div><p class="mu">${aba=='fila'?'Nenhuma entrega agora. A lista atualiza sozinha.':'Nenhuma entrega feita hoje.'}</p></div>`);
+  const nMeus=fila.filter(o=>o.rota&&o.rota.id==EU.id).length;
+  $('#m').innerHTML=(aba=='feitas'?resumo():'')+(aba=='fila'&&nMeus>1?`<button class="b w" style="margin:0 0 10px" onclick="rotaTodas()">🗺️ Rota com as ${nMeus} entregas que estão comigo</button>`:'')+(l.length?l.map(card).join(''):`<div class="vazio"><div>${aba=='fila'?'😴':'📦'}</div><p class="mu">${aba=='fila'?'Nenhuma entrega agora. A lista atualiza sozinha.':'Nenhuma entrega feita hoje.'}</p></div>`);
 }
-async function pegar(id){const r=await sb.rpc('entregador_pegar',{p_id:id});if(r.error)toast(r.error.message);else toast('Pedido com você. Boa entrega!');carregar()}
+async function pegar(id){const r=await sb.rpc('entregador_pegar',{p_id:id});if(r.error)return toast(r.error.message);await carregar();rotaPergunta(id)}
+/* ===== ROTA AUTOMÁTICA: vai direto para a localização REAL do cliente (GPS que ele confirmou no mapa) ===== */
+const gm=(dest,wps)=>'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination='+dest.lat+','+dest.lng+(wps&&wps.length?'&waypoints='+wps.map(w=>w.lat+','+w.lng).join('%7C'):'');
+const okLoc=l=>l&&isFinite(l.lat)&&isFinite(l.lng);
+function paradas(o){ // primeiro buscar nos parceiros (se o entregador busca), depois o cliente
+  const st=[];Object.values(o.parts||{}).forEach(p=>{if(p.entrega!='parceiro'&&!p.col&&okLoc(p.loc))st.push({...p.loc,nome:'📦 '+p.nome,coleta:true})});
+  if(okLoc(o.loc))st.push({...o.loc,nome:o.cn||'Cliente'});return st}
+function rotaPergunta(id){
+  const o=L.find(x=>x.id==id);if(!o)return toast('Pedido com você. Boa entrega!');
+  const st=paradas(o);if(!st.length)return toast('Pedido com você. Este cliente não marcou a localização no mapa: use o endereço.');
+  const dest=st[st.length-1],wps=st.slice(0,-1);
+  const ov=document.createElement('div');ov.className='ov';ov.onclick=e=>{if(e.target==ov)ov.remove()};
+  ov.innerHTML=`<div class="card"><h2 style="margin:0 0 6px">🛵 Pedido com você</h2><p style="font-size:16px;margin:0 0 6px">Destino: <b>${esc(o.cn||'Cliente')}</b>${o.bairro?' · '+esc(o.bairro):''}</p>
+   <p class="mu" style="margin:0 0 10px">${wps.length?'Primeiro: '+wps.map(w=>esc(w.nome)).join(', ')+'. ':''}A rota vai até a localização marcada pelo cliente no mapa${o.loc&&o.loc.acc?' (±'+o.loc.acc+' m)':''}.</p>
+   <a class="b w" style="font-size:18px" href="${gm(dest,wps)}" target="_blank" rel="noopener" onclick="this.closest('.ov').remove()">🗺️ Iniciar rota agora</a>
+   <a class="b s w" style="margin-top:8px" href="https://waze.com/ul?ll=${(wps[0]||dest).lat},${(wps[0]||dest).lng}&navigate=yes" target="_blank" rel="noopener" onclick="this.closest('.ov').remove()">Abrir no Waze${wps.length?' (1ª parada)':''}</a>
+   <button class="b s w" style="margin-top:8px;width:100%" onclick="this.closest('.ov').remove()">Depois</button></div>`;
+  document.body.appendChild(ov);
+}
+/* uma rota só com todas as entregas que estão com o entregador (ordem pela mais perto, buscando no parceiro antes do cliente) */
+async function rotaTodas(){
+  const meus=L.filter(o=>o.st=='conf'&&o.rota&&EU&&o.rota.id==EU.id);
+  const eu=await new Promise(ok=>{if(!navigator.geolocation)return ok(null);navigator.geolocation.getCurrentPosition(p=>ok({lat:p.coords.latitude,lng:p.coords.longitude}),()=>ok(null),{enableHighAccuracy:true,timeout:6000,maximumAge:60000})});
+  let pend=meus.map(o=>({o,st:paradas(o)})).filter(x=>x.st.length),seq=[],cur=eu,semLoc=meus.length-pend.length;
+  const d=(a,b)=>!a?0:Math.hypot((a.lat-b.lat)*110540,(a.lng-b.lng)*111320*Math.cos(b.lat*Math.PI/180));
+  while(pend.length){let bi=0,bd=1e12;pend.forEach((x,i)=>{const dd=d(cur,x.st[0]);if(dd<bd){bd=dd;bi=i}});const x=pend[bi];seq.push(x.st.shift());cur=seq[seq.length-1];if(!x.st.length)pend.splice(bi,1)}
+  if(!seq.length)return toast('Nenhuma das suas entregas tem localização no mapa.');
+  if(seq.length>10){toast('Muitas paradas: a rota abre com as 10 primeiras.');seq=seq.slice(0,10)}
+  if(semLoc)toast(semLoc+' entrega(s) sem localização no mapa ficaram fora da rota.');
+  window.open(gm(seq[seq.length-1],seq.slice(0,-1)),'_blank','noopener');
+}
 async function soltar(id){await sb.rpc('entregador_soltar',{p_id:id});carregar()}
 function entregar(id){
   const o=L.find(x=>x.id==id);if(!o)return;const tr=+o.troco||0;
