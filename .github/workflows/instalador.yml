@@ -1,0 +1,165 @@
+name: Gerar e publicar versao
+
+# Repositorio PRIVADO (codigo). O que sai daqui vai para o repositorio PUBLICO (site + downloads).
+# - Push na main: gera o instalador e deixa em Actions > (execucao) > Artifacts (para testar).
+# - PUBLICAR UMA VERSAO: Actions > "Gerar e publicar versao" > Run workflow.
+#   O numero da versao e gerado sozinho (data e hora de Brasilia, ex.: v2026.11.21-2330).
+#   Gera, ASSINA, publica a Release no repositorio publico e atualiza o site dos apps.
+# - Tag v* criada a mao tambem publica (opcional).
+#
+# Configurar uma vez em Settings > Secrets and variables > Actions:
+#   Secrets:   ASSINATURA_CHAVE  (conteudo do arquivo assinatura-privada.pem)
+#              PUBLICAR_TOKEN    (token "Contents: Read and write" no repositorio publico)
+#   Variables: REPO_PUBLICO      (ex.: adaptasystemas/AdaptasysCatalogo)
+#              SUPABASE_URL, SUPABASE_ANON_KEY, PRODUTO  (opcionais: geram o config.js do site)
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publicar:
+        description: 'Publicar para as lojas (desmarque para so testar)'
+        type: boolean
+        default: true
+      novidades:
+        description: 'O que mudou nesta versao (aparece na Gestao das lojas)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  versao:
+    runs-on: ubuntu-latest
+    env:
+      REPO_PUBLICO: ${{ vars.REPO_PUBLICO || 'adaptasystemas/AdaptasysCatalogo' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Montar programa e site
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          PRODUTO: ${{ vars.PRODUTO }}
+        run: node scripts/montar.js
+
+      - name: Numero da versao e se publica
+        env:
+          IN_PUB: ${{ inputs.publicar }}
+        run: |
+          P=false
+          TAG="v$VERSAO"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then P=true; TAG="$GITHUB_REF_NAME"; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$IN_PUB" = "true" ]; then
+            P=true
+          fi
+          echo "PUBLICAR=$P" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "Versao $VERSAO  tag $TAG  publicar=$P"
+
+      - name: Assinar o pacote
+        env:
+          ASSINATURA_CHAVE: ${{ secrets.ASSINATURA_CHAVE }}
+        run: |
+          if [ -z "$ASSINATURA_CHAVE" ] && [ "$PUBLICAR" = "true" ]; then
+            echo "::error::Falta o secret ASSINATURA_CHAVE"
+            exit 1
+          fi
+          node scripts/assinar.js dist/AdaptaSysMercado
+
+      - name: Zip de atualizacao e site
+        run: |
+          cd dist
+          zip -qr -X "AdaptaSys-Mercado-$VERSAO.zip" AdaptaSysMercado
+          (cd site && zip -qr -X "../site-adaptasys-mercado-$VERSAO.zip" .)
+          cp ../app/supabase.sql .
+
+      - name: Embutir o Node.js 22 (Windows x64)
+        run: |
+          curl -fsSLo /tmp/idx.json https://nodejs.org/dist/index.json
+          FILTRO='[.[] | select(.lts != false)] | map(select(.version | startswith("v22.")))'
+          VER=$(jq -r "$FILTRO | .[0].version" /tmp/idx.json)
+          NOME=node-$VER-win-x64
+          BASE=https://nodejs.org/dist/$VER
+          curl -fsSLo /tmp/node.zip $BASE/$NOME.zip
+          curl -fsSLo /tmp/sums.txt $BASE/SHASUMS256.txt
+          ESPERADO=$(grep " $NOME.zip$" /tmp/sums.txt | cut -d' ' -f1)
+          echo "$ESPERADO  /tmp/node.zip" | sha256sum -c -
+          unzip -q -j /tmp/node.zip $NOME/node.exe -d dist/AdaptaSysMercado/node
+          echo "Node.js $VER embutido"
+
+      - name: Gerar o .exe
+        run: |
+          cd dist && zip -qr -X ../instalador/payload.zip AdaptaSysMercado && cd ..
+          cp dist/versao.txt instalador/versao.txt
+          cd instalador
+          python3 mkres.py ../app/pdv.ico "$VERSAO" rsrc_windows_amd64.syso
+          export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
+          go build -trimpath -ldflags "-s -w" \
+            -o "../dist/AdaptaSysMercado-Setup-$VERSAO.exe" .
+          ls -la ../dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdaptaSysMercado-${{ env.VERSAO }}
+          path: |
+            dist/AdaptaSysMercado-Setup-*.exe
+            dist/AdaptaSys-Mercado-*.zip
+            dist/site-adaptasys-mercado-*.zip
+            dist/supabase.sql
+          retention-days: 30
+
+      - name: Publicar a Release no repositorio publico
+        if: env.PUBLICAR == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.REPO_PUBLICO }}
+          token: ${{ secrets.PUBLICAR_TOKEN }}
+          tag_name: ${{ env.TAG }}
+          name: AdaptaSys Mercado ${{ env.VERSAO }}
+          body: |
+            ${{ inputs.novidades }}
+
+            ## Como instalar ou atualizar
+            - Loja: a Gestao avisa a versao nova (Configuracoes > Atualizacoes).
+            - Primeira instalacao ou caixa da rede: baixe o .exe e execute.
+            - Supabase: se esta versao mudou o banco, rode o supabase.sql.
+          files: |
+            dist/AdaptaSysMercado-Setup-*.exe
+            dist/AdaptaSys-Mercado-*.zip
+            dist/supabase.sql
+
+      - name: Atualizar o site dos apps no repositorio publico
+        if: env.PUBLICAR == 'true'
+        env:
+          TOKEN: ${{ secrets.PUBLICAR_TOKEN }}
+        run: |
+          URL="https://x-access-token:${TOKEN}@github.com/${REPO_PUBLICO}.git"
+          git clone --depth 1 "$URL" publico
+          # mantem o config.js do site quando ele nao foi gerado aqui
+          if [ ! -f dist/site/config.js ] && [ -f publico/config.js ]; then
+            cp publico/config.js dist/site/config.js
+          fi
+          rsync -a --delete --exclude .git --exclude README.md \
+            --exclude .nojekyll dist/site/ publico/
+          touch publico/.nojekyll
+          cd publico
+          git config user.name "AdaptaSys (publicacao automatica)"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Site sem mudancas."
+          else
+            git commit -q -m "Site da versao $VERSAO"
+            git push -q
+          fi
