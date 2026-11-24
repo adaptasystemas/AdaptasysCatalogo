@@ -341,7 +341,7 @@ function vCart(){
   <button class="b s w" onclick="gpsFill(r=>{co.loc=r.loc;if(r.addr)co.addr=r.addr;render();gpsToast(r)})">📍 ${co.loc?'Atualizar localização':'Usar minha localização'}</button>
   ${co.loc?`<p class="mu">Local: <a target="_blank" rel="noopener" href="${mapUrl(co.loc)}">${co.loc.lat}, ${co.loc.lng}</a>${co.loc.acc?' (±'+co.loc.acc+' m)':''}</p>`:''}
   <label style="display:block;margin-top:10px">Forma de pagamento</label>
-  <select onchange="co.pay=this.value;render()">${[...(CUST&&EMP.mpApp?[['Online',EMP.ipApp?'💳 Pagar agora com Mercado Pago (Pix ou cartão)':'💳 Pagar agora pelo app (Pix ou cartão)']]:[]),...(CUST&&EMP.ipApp?[['OnlineIP',EMP.mpApp?'🟢 Pagar agora com InfinitePay (Pix ou cartão até 12x)':'💳 Pagar agora pelo app (Pix ou cartão até 12x)']]:[]),['Dinheiro','Dinheiro na entrega'],['Pix','Pix na entrega'],['Cartão','Cartão na entrega']].map(([x,t])=>`<option value="${x}" ${co.pay==x?'selected':''}>${CUST?t:x}</option>`).join('')}</select>
+  <select onchange="co.pay=this.value;render()">${[...(CUST&&EMP.mpApp?[['Online',EMP.ipApp?'💳 Pagar agora com Mercado Pago (Pix ou cartão)':'💳 Pagar agora pelo app (Pix ou cartão)']]:[]),...(CUST&&EMP.ipApp?[['OnlineIP',EMP.mpApp?'🟢 Pagar agora com InfinitePay (Pix ou cartão até 12x)':'💳 Pagar agora pelo app (Pix ou cartão até 12x)']]:[]),['Dinheiro','Dinheiro na entrega'],['Cartão','Cartão na entrega']].map(([x,t])=>`<option value="${x}" ${co.pay==x?'selected':''}>${CUST?t:x}</option>`).join('')}</select>
   ${co.pay=='Online'?'<p class="mu">💳 Ao enviar o pedido aparece o Pix (copia e cola) e o botão para pagar com cartão. A loja recebe o pedido assim que o pagamento cair.</p>':co.pay=='OnlineIP'?'<p class="mu">🟢 Ao enviar o pedido aparece o botão para pagar na página segura da InfinitePay (Pix ou cartão). Depois de pagar você volta para cá e a loja recebe o pedido.</p>':''}
   ${co.pay=='Pix'&&EMP.pix?'<p class="mu">💠 O código Pix (copia e cola) e o QR Code aparecem ao enviar o pedido.</p>':''}${co.pay=='Dinheiro'?`<label>Troco para quanto? (deixe vazio se não precisa)</label><input type="number" inputmode="decimal" min="0" step="0.01" value="${esc(co.cash)}" oninput="co.cash=this.value;trocoTxt()"><p id="tr" class="mu"></p>`:''}
   <label>Observações</label><input value="${esc(co.obs)}" oninput="co.obs=this.value" placeholder="Ex.: portão azul">
@@ -904,8 +904,6 @@ vCfg=function(){
   ${inp('ce-n','Nome da empresa',E.n)}
   ${inp('ce-cnpj','CNPJ',E.cnpj,'inputmode="numeric" placeholder="00.000.000/0000-00" onblur="this.value=fmtCnpj(this.value)"')}
   ${inp('ce-e','Endereço (rua e número)',E.e)}${inp('ce-c','Cidade / UF',E.c)}${inp('ce-t','Telefone / WhatsApp (com DDD)',E.tel,'type="tel"')}
-  <label>Chave Pix da loja (para receber os pagamentos)</label><div class="g2"><select id="ce-pt" aria-label="Tipo da chave Pix">${[['cpf','CPF'],['cnpj','CNPJ'],['cel','Celular'],['email','E-mail'],['evp','Chave aleatória']].map(([v,t])=>`<option value="${v}" ${(E.pixT||'cnpj')==v?'selected':''}>${t}</option>`).join('')}</select><input id="ce-pk" value="${esc(E.pix||'')}" placeholder="Digite a chave" style="margin:4px 0 8px"></div>
-  <p class="mu" style="margin-top:-4px">Quem escolher Pix recebe o código "copia e cola" e o QR Code com o valor do pedido. No banco, o pagamento aparece para ${esc(String(E.n||'').toUpperCase().slice(0,25))}.</p>
   <label>Mensagem no fim do cupom</label><textarea id="ce-m" rows="2">${esc(E.msg)}</textarea>
   <label>Logotipo</label><div class="row" style="justify-content:flex-start;align-items:flex-start"><img id="lgp" alt="" src="${E.logo||'logo.png'}" style="width:90px;height:90px;object-fit:contain;background:#fff;border-radius:10px;border:1px solid var(--bd)"><div style="flex:1"><input type="file" accept="image/*" onchange="pickLogo(this)"><button class="d" onclick="EMP.logo='';$('#lgp').src='logo.png';refPrev()">Usar logotipo padrão</button></div></div></div>
   <div class="card"><h2>🛵 Taxa de entrega por bairro</h2>
@@ -944,9 +942,7 @@ function pickLogo(inp){
 }
 async function saveEmp(){
   const g=i=>$('#'+i).value.trim();
-  const pk=g('ce-pk'),pt=$('#ce-pt').value;
-  if(pk&&!pixKeyNorm(pk,pt))return alert('A chave Pix não confere com o tipo escolhido. Confira o número, o e-mail ou a chave aleatória.');
-  Object.assign(EMP,{n:g('ce-n')||EMP0.n,cnpj:fmtCnpj(g('ce-cnpj')),e:g('ce-e'),c:g('ce-c'),tel:g('ce-t'),msg:$('#ce-m').value.trim(),pix:pk,pixT:pt,taxas:(EMP.taxas||[]).filter(t=>String(t.b).trim()).map(t=>({b:String(t.b).trim(),v:Math.max(0,+t.v||0)})),taxaPad:$('#ce-tp').value.trim()===''?'':Math.max(0,parseFloat($('#ce-tp').value.replace(',','.'))||0)});
+  Object.assign(EMP,{n:g('ce-n')||EMP0.n,cnpj:fmtCnpj(g('ce-cnpj')),e:g('ce-e'),c:g('ce-c'),tel:g('ce-t'),msg:$('#ce-m').value.trim(),pix:'',pixT:'',taxas:(EMP.taxas||[]).filter(t=>String(t.b).trim()).map(t=>({b:String(t.b).trim(),v:Math.max(0,+t.v||0)})),taxaPad:$('#ce-tp').value.trim()===''?'':Math.max(0,parseFloat($('#ce-tp').value.replace(',','.'))||0)});
   try{localStorage.setItem('mkcfg',JSON.stringify(EMP))}catch(e){}
   applyEmp();
   if(!sb)return alert('Ajustes salvos neste aparelho.');
@@ -1431,7 +1427,7 @@ function printFech(){
 /* ===== TOQUE DE NOVO PEDIDO (3 opções + toque próprio) ===== */
 let tq='classico',tvol=1,tCustom=null,tAudio=null;
 try{tq=localStorage.getItem('toque')||'classico';tvol=parseFloat(localStorage.getItem('tvol')||'1')||1}catch(e){}
-const kvOpen=()=>new Promise((res,rej)=>{const r=indexedDB.open('mezzomo',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
+const kvOpen=()=>new Promise((res,rej)=>{const r=indexedDB.open('adaptasys',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
 const kvGet=async k=>{const d=await kvOpen();return new Promise((res,rej)=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)})};
 const kvSet=async(k,v)=>{const d=await kvOpen();return new Promise((res,rej)=>{const t=d.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error)})};
 const kvDel=async k=>{const d=await kvOpen();return new Promise((res,rej)=>{const t=d.transaction('kv','readwrite');t.objectStore('kv').delete(k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error)})};
