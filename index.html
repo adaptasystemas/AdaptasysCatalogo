@@ -546,7 +546,9 @@ const bloqueado=()=>CADASTRO_OBRIGATORIO&&CFG&&!!sb&&!perfilOk(me);
 const faltaPerfil=m=>{m=m||{};const f=[];if(!m.n)f.push('nome');if(digits(m.t).length<10)f.push('WhatsApp com DDD');if(!m.rua)f.push('rua');if(!m.num)f.push('número da casa (ou S/N)');if(!m.bai)f.push('bairro');if(!m.cid)f.push('cidade');return f};
 const wz=i=>{$('#aw').hidden=!i.value.includes('@')};
 const instTip='<p class="mu">Para instalar o app: no Android toque em "Instalar app" no topo; no iPhone toque em Compartilhar e depois em Adicionar à Tela de Início.</p>';
-const locBtn=`<button class="b w gpsb" onclick="gpsFill(r=>{cLoc=r.loc;fillAddr(r);mapaMostra(cLoc)})">📍 Encontrar meu endereço</button><p class="mu" style="margin:6px 0 0;font-size:13px">Use o GPS do celular e depois confirme no mapa (satélite) que o pino está na sua casa. Assim a entrega chega no lugar certo.</p><div id="mapa" class="mapa" hidden></div>`;
+const locBtn=`<button class="b w gpsb" onclick="gpsRapido()">📍 Usar minha localização</button><p class="mu" style="margin:6px 0 0;font-size:13px">Preenche a rua e o bairro sozinho. Você só confere e digita o número.</p>
+<label>Ou busque sua rua</label><input id="busc" placeholder="Digite o nome da rua ou do bairro" autocomplete="off" oninput="buscaRua(this.value)"><div id="busl"></div>
+<button class="b s w" id="mbtn" style="margin-top:8px" onclick="mapaAbre()">🗺️ Ajustar no mapa (opcional)</button><div id="mapa" class="mapa" hidden></div>`;
 async function entrar(){
   if(!sb)return alert('Sem conexão. Tente de novo com internet.');
   const em=authEmail($('#al').value);
@@ -1131,7 +1133,7 @@ async function oauthRetorno(){
 }
 function vEu(){
   if(user)return vPerfil();
-  if(cLoc)setTimeout(()=>mapaMostra(cLoc),60);
+  setTimeout(()=>{confBox();autoLocal()},80);
   const gEnt=googleOn()?`<div class="card" style="text-align:center"><b>Já tem cadastro nesta loja?</b><p class="mu" style="margin:4px 0 10px">Se você salvou o cadastro com o Google, entre e ele volta inteiro: endereço e pedidos.</p><button class="b s w" onclick="googleEntrar()">${GSVG}Entrar com Google</button></div>`:'';
   return gEnt+`${bloqueado()?`<div class="card bemv"><b>Bem-vindo ao ${esc(EMP.n)}!</b><br>${items().length?'Falta só o seu cadastro para enviar o pedido. O carrinho fica guardado.':'Faça seu cadastro para pedir. Não precisa de senha: é só uma vez.'}</div>`:''}<div class="card"><h2>Seu cadastro</h2>
   <label>Nome completo *</label><input id="an" autocomplete="name">
@@ -1142,7 +1144,7 @@ function vEu(){
 }
 function vPerfil(){
   const md=(user&&user.user_metadata)||{},m=me||{n:md.full_name||md.name||'',e:(user&&!user.is_anonymous&&user.email)||''},l=cLoc||m.loc;
-  const fl=faltaPerfil(me);if(l)setTimeout(()=>mapaMostra(l),60);
+  const fl=faltaPerfil(me);setTimeout(()=>{confBox();if(fl.length)autoLocal()},80);
   const gCard=googleOn()&&!temGoogle(user)?`<div class="card"><b>🔒 Não perca seu cadastro (opcional)</b><p class="mu" style="margin:4px 0 10px">Ligue seu cadastro à sua conta Google. Se trocar de celular ou reinstalar o app, é só tocar em "Entrar com Google" e tudo volta: endereço e pedidos.</p><button class="b w" onclick="googleSalvar()">${GSVG}Salvar meu cadastro com Google</button></div>`:'';
   return `<div class="card"><h2>Minha conta</h2>${fl.length?`<p class="falta">Para fazer pedidos, complete: <b>${fl.join(', ')}</b>.</p>`:''}
   <label>Nome</label><input id="mn" value="${esc(m.n)}" autocomplete="name">
@@ -1235,7 +1237,12 @@ async function mapaMostra(loc){
 function confBox(){
   let b=$('#mconf');const d=$('#mapa');if(!d)return;
   if(!b){b=document.createElement('div');b.id='mconf';d.after(b)}
-  const l=cLoc||(me&&me.loc);if(!l){b.innerHTML='';return}
+  {const c=$('#cl'),g=document.querySelector('.gpsb');if(c&&g&&g.nextElementSibling&&g.nextElementSibling.nextElementSibling!==c)g.nextElementSibling.after(c)}
+  const l=cLoc||(me&&me.loc),mb=$('#mbtn');if(!l){b.innerHTML='';if(mb)mb.hidden=false;return}
+  if(d.hidden){
+    b.innerHTML=l.aprox?`<div class="mok">📍 Ponto aproximado pela rua. Para o entregador chegar certinho, toque em "Ajustar no mapa" (opcional).</div>`:`<div class="mok">✅ Localização salva${l.acc?' (±'+l.acc+' m)':''}. Não precisa fazer mais nada.</div>`;
+    if(mb)mb.hidden=false;return}
+  if(mb)mb.hidden=true;
   b.innerHTML=l.ok?`<div class="mok">✅ Local confirmado${l.manual?' (marcado por você)':' (±'+l.acc+' m)'}. Se não estiver na sua porta, toque no lugar certo do mapa.</div>`
    :`<div class="mq"><b>O pino está na sua casa?</b><br><span class="mu">Use o modo Satélite para ver o telhado. Se não estiver certo, toque no lugar exato do mapa ou arraste o pino.</span><button class="b ok w" style="margin-top:8px" onclick="cLoc={...(cLoc||me.loc),ok:true};confBox()">✅ Sim, é aqui</button></div>`;
 }
@@ -1246,6 +1253,89 @@ function renderAcc(){
   b.hidden=!CUST;b.classList.toggle('on',tab=='eu');
   const d=b.querySelector('i');if(d)d.hidden=!user;
   b.title=user?'Minha conta':'Entrar';
+}
+
+
+/* ===== LOCALIZAÇÃO FÁCIL: automática ao cadastrar, busca de rua, "estou em outro lugar" ===== */
+const distM=(a,b)=>{const R=6371000,t=x=>x*Math.PI/180,dl=t(b.lat-a.lat),dn=t(b.lng-a.lng),h=Math.sin(dl/2)**2+Math.cos(t(a.lat))*Math.cos(t(b.lat))*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+async function gpsPermissao(){try{if(navigator.permissions&&navigator.permissions.query)return (await navigator.permissions.query({name:'geolocation'})).state}catch(e){}return 'prompt'}
+/* leitura rápida e silenciosa: para assim que ficar bom (≤30 m) ou no tempo limite; nunca mostra alerta */
+function locRapida(ms){
+  return new Promise(async res=>{
+    if(!navigator.geolocation||await gpsPermissao()=='denied')return res(null);
+    let best=null,done=false,id;
+    const fim=()=>{if(done)return;done=true;try{navigator.geolocation.clearWatch(id)}catch(e){}clearTimeout(tm);res(best&&best.acc<=500?{lat:+best.lat.toFixed(6),lng:+best.lng.toFixed(6),acc:Math.max(1,Math.round(best.acc))}:null)};
+    const tm=setTimeout(fim,ms||12000);
+    id=navigator.geolocation.watchPosition(p=>{const x={lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy||9999};if(!best||x.acc<best.acc)best=x;if(best.acc<=30)fim()},()=>fim(),{enableHighAccuracy:true,maximumAge:30000,timeout:ms||12000});
+  });
+}
+function notaLoc(h){const e=$('#cl');if(e)e.innerHTML=h}
+let _autoTent=false;
+async function autoLocal(){
+  if(_autoTent||!$('#f-rua'))return;_autoTent=true;
+  if((cLoc||(me&&me.loc))&&$('#f-rua').value.trim())return;
+  if(await gpsPermissao()=='denied')return notaLoc('Sem problema: digite sua rua abaixo ou use a busca. Se quiser a localização automática, libere em Configurações do celular › Localização.');
+  notaLoc('📡 Procurando onde você está…');
+  const l=await locRapida(12000);
+  if(!l)return notaLoc('Não consegui achar sua localização agora. Sem problema: busque sua rua abaixo ou digite o endereço.');
+  await aplicaLoc(l);
+}
+async function aplicaLoc(l){
+  l.ok=l.acc<=30;let r={};try{r=await endSug(l.lat,l.lng)}catch(e){}
+  cLoc=l;fillAddr({loc:l,...r});confBox();
+  const num=$('#f-num');if(num&&!num.value)num.focus();
+  if(r&&r.rua)notaLoc('✅ Achamos você perto de <b>'+esc(r.rua)+'</b>'+(r.bai?' · '+esc(r.bai):'')+'. Falta só o número da casa.')
+}
+async function gpsRapido(){
+  notaLoc('📡 Procurando onde você está…');
+  const l=await locRapida(15000);
+  if(!l){notaLoc('Não consegui pelo GPS agora. Busque sua rua abaixo, ou <a href="#" onclick="gpsFill(r=>{cLoc=r.loc;fillAddr(r);confBox()});return false">tente o GPS preciso</a>.');return}
+  await aplicaLoc(l);
+}
+/* busca de rua pelo nome (OpenStreetMap), na cidade da loja */
+let _bt=null,_busR=[];
+function buscaRua(v){
+  clearTimeout(_bt);const el=$('#busl');if(!el)return;v=String(v||'').trim();
+  if(v.length<3){el.innerHTML='';return}
+  _bt=setTimeout(async()=>{
+    try{
+      const ref=cLoc||(me&&me.loc)||EMP.loc,vb=ref&&ref.lat?`&viewbox=${ref.lng-.12},${ref.lat+.12},${ref.lng+.12},${ref.lat-.12}`:'';
+      const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=br&accept-language=pt-BR${vb}&q=${encodeURIComponent(v+(EMP.c?', '+EMP.c:''))}`);
+      const j=await r.json();
+      _busR=(j||[]).filter(x=>x.address&&(x.address.road||x.address.suburb||x.address.neighbourhood));
+      if(!$('#busl'))return;
+      $('#busl').innerHTML=_busR.length?_busR.map((x,i)=>{const a=x.address;return `<button class="b s w" style="margin-top:4px;text-align:left" onclick="escolheRua(${i})">📍 ${esc(a.road||a.suburb||a.neighbourhood)}<br><small class="mu">${esc([a.suburb||a.neighbourhood,a.city||a.town||a.village].filter(Boolean).join(' · '))}</small></button>`}).join(''):'<p class="mu" style="margin:6px 0 0">Não achei essa rua. Tente só o nome principal, ou digite o endereço nos campos.</p>';
+    }catch(e){if($('#busl'))$('#busl').innerHTML='<p class="mu" style="margin:6px 0 0">A busca não respondeu agora. Digite o endereço nos campos abaixo.</p>'}
+  },500);
+}
+function escolheRua(i){
+  const x=_busR[i];if(!x)return;const a=x.address,lat=+x.lat,lng=+x.lon;
+  const rua=a.road||'',bai=a.suburb||a.neighbourhood||a.quarter||'',cid0=a.city||a.town||a.village||a.municipality||'',uf=String(a['ISO3166-2-lvl4']||'').split('-')[1]||'',cid=cid0?cid0+(uf?'/'+uf:''):'';
+  if(rua){const e=$('#f-rua');if(e){e.value=rua;e.dataset.mexeu=1}}
+  if(bai&&!setBai(bai,true)&&!$('#f-bai-s')){const e=$('#f-bai');if(e)e.value=bai}
+  if(cid){const e=$('#f-cid');if(e)e.value=cid}
+  if(!cLoc||cLoc.aprox||distM(cLoc,{lat,lng})>400)cLoc={lat:+lat.toFixed(6),lng:+lng.toFixed(6),acc:150,aprox:true,ok:false};
+  $('#busl').innerHTML='';const b=$('#busc');if(b)b.value='';
+  notaLoc('✅ Rua escolhida. Falta só o número da casa.');confBox();
+  const num=$('#f-num');if(num)num.focus();
+}
+function mapaAbre(){const l=cLoc||(me&&me.loc);if(!l)return alert('Primeiro toque em "Usar minha localização" ou busque sua rua. Depois você ajusta no mapa.');mapaMostra(l)}
+/* no pedido: se o cliente está longe do endereço salvo, pergunta se entrega onde ele está agora */
+let _outroTent=false;
+async function checaOutroLocal(){
+  const el=$('#outro');if(!el||_outroTent||!CUST||!me||!me.loc||co.ent=='retirada')return;
+  _outroTent=true;if(await gpsPermissao()=='denied')return;
+  const l=await locRapida(8000);if(!l||!$('#outro'))return;
+  const d=Math.round(distM(me.loc,l));if(d<300)return;
+  $('#outro').innerHTML=`<div class="mq"><b>📍 Você parece estar em outro lugar</b><br><span class="mu">A ${d>=1000?(d/1000).toFixed(1).replace('.',',')+' km':d+' m'} do seu endereço salvo. Quer receber onde está agora?</span><button class="b w" style="margin-top:8px" onclick="entregaAqui()">Entregar onde estou agora</button><button class="b s w" style="margin-top:6px" onclick="$('#outro').innerHTML=''">Manter meu endereço salvo</button></div>`;
+  window._outroLoc=l;
+}
+async function entregaAqui(){
+  const l=window._outroLoc;if(!l)return;$('#outro').innerHTML='<p class="mu">🔎 Buscando o endereço…</p>';
+  let r={};try{r=await endSug(l.lat,l.lng)}catch(e){}
+  co.loc={...l,ok:l.acc<=30};co.addr=(r.addr||'')+(r.addr?' (confira e coloque o número)':'');
+  if(r.bai){const m=(EMP.taxas||[]).find(t=>norm(t.b)==norm(r.bai2||r.bai));if(m)co.bai=m.b}
+  render();toastMsg('📍 Entrega neste local. Confira o endereço abaixo e acrescente o número da casa.');
 }
 
 /* ===== INSTALAÇÃO OBRIGATÓRIA DO APP (Android e iPhone) ===== */
@@ -1677,7 +1767,7 @@ function horBarra(){
 setInterval(()=>{const b=$('#horb');if(b&&(tab=='loja'||tab=='cart')){const t=document.createElement('div');t.innerHTML=horBarra();const n=t.firstElementChild;if(n&&n.outerHTML!=b.outerHTML&&!b.querySelector('details[open]'))b.replaceWith(n)}},60000);
 /* carrinho: fora do horário mostra o aviso e não deixa enviar */
 const _vcHor=vCart;
-vCart=function(){let h=_vcHor();if(CUST&&items().length){const st=horSt(EMP.hor);if(!st.aberto)h=horBarra()+`<div class="card horfe">${esc(horMsg(st))}</div>`+h.replace('onclick="finishC()"','onclick="finishC()" disabled style="opacity:.5"')}return h};
+vCart=function(){let h=_vcHor();if(CUST&&me&&me.loc&&items().length){h=h.replace('<label>Endereço de entrega</label>','<div id="outro"></div><label>Endereço de entrega</label>');setTimeout(checaOutroLocal,400)}if(CUST&&items().length){const st=horSt(EMP.hor);if(!st.aberto)h=horBarra()+`<div class="card horfe">${esc(horMsg(st))}</div>`+h.replace('onclick="finishC()"','onclick="finishC()" disabled style="opacity:.5"')}return h};
 function txHtml(){
   return (EMP.taxas||[]).map((t,i)=>`<div class="g2tx"><input value="${esc(t.b)}" placeholder="Nome do bairro" oninput="EMP.taxas[${i}].b=this.value"><input type="number" inputmode="decimal" min="0" step="0.5" value="${t.v}" placeholder="R$" oninput="EMP.taxas[${i}].v=parseFloat(this.value)||0"><button class="b rd" style="padding:0" onclick="txDel(${i})" aria-label="Remover bairro">✕</button></div>`).join('')||'<p class="mu">Nenhum bairro cadastrado: a entrega não tem taxa.</p>';
 }
