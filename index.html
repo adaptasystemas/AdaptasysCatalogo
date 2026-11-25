@@ -563,7 +563,7 @@ async function loadMe(){
   const {data}=await sb.from('clients').select('data').eq('id',user.id).maybeSingle();
   me=data?data.data:null;
 }
-async function sair(){await sb.auth.signOut();user=null;me=null;S.mine=[];loc();go('loja')}
+async function sair(){await sb.auth.signOut();user=null;me=null;S.mine=[];ENT.p=0;ENT.pronto=false;ENT.n=ENT.t=ENT.e='';loc();go('loja')}
 async function finishC(){
   if(!user||!me||bloqueado()){toastMsg('Falta só o seu cadastro (uma vez só) para enviar o pedido. O carrinho fica guardado.');return go('eu')}
   await loadCfg();{const hs=horSt(EMP.hor);if(!hs.aberto){render();return alert(horMsg(hs))}}
@@ -1131,16 +1131,35 @@ async function oauthRetorno(){
   }
   return '';
 }
+const ENT={p:0,n:'',t:'',e:'',pronto:false};
+function entIr(n){ENT.p=n;render();window.scrollTo(0,0)}
+function entProx(){
+  const n=($('#an')||{value:''}).value.trim(),t=($('#at')||{value:''}).value.trim();
+  if(n.length<2)return alert('Digite seu nome.');
+  if(digits(t).length<10)return alert('Digite seu WhatsApp com DDD. Exemplo: (93) 99999-9999.');
+  ENT.n=n;ENT.t=t;entIr(2);
+}
+function vPronto(){
+  const nome=String((me&&me.n)||'').trim().split(/\s+/)[0]||'';
+  const g=googleOn()&&!temGoogle(user)?`<div class="card" style="border-color:var(--ac)"><b>🔒 Proteja seu cadastro</b><p class="mu" style="margin:4px 0 10px">Se trocar de celular, você recupera tudo entrando com o Google. É opcional.</p><button class="b s w" onclick="googleSalvar()">${GSVG}Ligar ao Google</button></div>`:'';
+  return `<div class="card" style="text-align:center"><div style="font-size:42px">✅</div><h2 style="margin:6px 0">Cadastro feito${nome?', '+esc(nome):''}!</h2><p class="mu">Já pode escolher seus produtos.</p></div>${g}<button class="b w" style="font-size:18px;padding:14px" onclick="ENT.pronto=false;go(items().length?'cart':'loja')">Começar a comprar</button>`;
+}
 function vEu(){
+  if(user&&ENT.pronto)return vPronto();
   if(user)return vPerfil();
   setTimeout(()=>{confBox();autoLocal()},80);
-  const gEnt=googleOn()?`<div class="card" style="text-align:center"><b>Já tem cadastro nesta loja?</b><p class="mu" style="margin:4px 0 10px">Se você salvou o cadastro com o Google, entre e ele volta inteiro: endereço e pedidos.</p><button class="b s w" onclick="googleEntrar()">${GSVG}Entrar com Google</button></div>`:'';
-  return gEnt+`${bloqueado()?`<div class="card bemv"><b>Bem-vindo ao ${esc(EMP.n)}!</b><br>${items().length?'Falta só o seu cadastro para enviar o pedido. O carrinho fica guardado.':'Faça seu cadastro para pedir. Não precisa de senha: é só uma vez.'}</div>`:''}<div class="card"><h2>Seu cadastro</h2>
-  <label>Nome completo *</label><input id="an" autocomplete="name">
-  <label>WhatsApp com DDD *</label><input id="at" type="tel" inputmode="tel" autocomplete="tel" placeholder="(93) 99999-9999">
-  <label>E-mail <small class="mu">(opcional)</small></label><input id="ae" type="email" inputmode="email" autocomplete="email" placeholder="nome@email.com">
-  <h2 style="margin-top:14px">Endereço de entrega</h2>${locBtn}<p id="cl" class="mu">${cLoc?'📍 '+cLoc.lat+', '+cLoc.lng:''}</p>${addrFields({})}
-  <button class="b w" onclick="criarConta()">Começar a comprar</button></div>${isStandalone()?'':instTip}`;
+  const bem=bloqueado()?`<div class="card bemv"><b>Bem-vindo ao ${esc(EMP.n)}!</b><br>${items().length?'Falta só o seu cadastro para enviar o pedido. O carrinho fica guardado.':'Faça seu cadastro para pedir. Não precisa de senha: é só uma vez.'}</div>`:'';
+  const topo=(k)=>`<div class="pbar"><i class="on"></i><i class="${k>=1?'on':''}"></i><i class="${k>=2?'on':''}"></i></div>`;
+  if(ENT.p==0)return bem+`<div class="card"><h2>${bem?'Como quer entrar?':'Bem-vindo ao '+esc(EMP.n)}</h2><p class="mu" style="margin:0 0 12px">Para pedir, escolha uma opção. Leva menos de 1 minuto e não tem senha.</p>
+    <button class="opc sel" onclick="entIr(1)"><span class="ic">🆕</span><span><b>Sou novo aqui</b><small>Criar meu cadastro</small></span></button>
+    ${googleOn()?`<button class="opc" onclick="googleEntrar()"><span class="ic">${GSVG}</span><span><b>Já tenho cadastro</b><small>Entrar com Google e recuperar tudo</small></span></button>`:''}</div>${isStandalone()?'':instTip}`;
+  if(ENT.p==1)return topo(1)+`<div class="ptit">Passo 1 de 2 · Quem é você?</div><div class="card"><div class="pbig" style="margin-top:0">Só duas informações</div>
+    <label>Seu nome *</label><input id="an" autocomplete="name" value="${esc(ENT.n)}">
+    <label>Seu WhatsApp com DDD *</label><input id="at" type="tel" inputmode="tel" autocomplete="tel" placeholder="(93) 99999-9999" value="${esc(ENT.t)}">
+    <p class="mu" style="font-size:13px">O WhatsApp é para a loja avisar do seu pedido.</p>
+    <button class="b w" onclick="entProx()">Continuar</button><button class="b s w" style="margin-top:8px" onclick="entIr(0)">← Voltar</button></div>`;
+  return topo(2)+`<div class="ptit">Passo 2 de 2 · Onde você mora?</div><div class="card"><div class="pbig" style="margin-top:0">Seu endereço de entrega</div>${locBtn}<p id="cl" class="mu">${cLoc?'📍 '+cLoc.lat+', '+cLoc.lng:''}</p>${addrFields({})}
+    <button class="b w" style="margin-top:6px" onclick="criarConta()">Concluir cadastro</button><button class="b s w" style="margin-top:8px" onclick="entIr(1)">← Voltar</button></div>`;
 }
 function vPerfil(){
   const md=(user&&user.user_metadata)||{},m=me||{n:md.full_name||md.name||'',e:(user&&!user.is_anonymous&&user.email)||''},l=cLoc||m.loc;
@@ -1159,7 +1178,7 @@ function vPerfil(){
 }
 async function criarConta(){
   if(!sb)return alert('Sem conexão. Tente de novo com internet.');
-  const n=$('#an').value.trim(),tel=$('#at').value.trim(),e=$('#ae').value.trim().toLowerCase(),f=readAddr();
+  const g0=(id,k)=>($('#'+id)?$('#'+id).value:(ENT[k]||'')).trim(),n=g0('an','n'),tel=g0('at','t'),e=g0('ae','e').toLowerCase(),f=readAddr();
   const fl=faltaPerfil({n,t:tel,...f,loc:cLoc});
   if(fl.length){alert('Para continuar, falta: '+fl.join(', ')+'.');return irConf(fl)}
   if(e&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))return alert('O e-mail parece incompleto. Corrija ou deixe em branco.');
@@ -1173,7 +1192,7 @@ async function criarConta(){
   me={id:user.id,n,t:tel,e,rua:f.rua,num:f.num,bai:f.bai,cid:f.cid,ref:f.ref,a:f.a,loc:cLoc?{...cLoc,ok:true}:null,date:new Date().toISOString()};
   const r=await sb.from('clients').upsert({id:me.id,data:me});
   if(r.error){me=null;return alert('O cadastro não foi salvo: '+r.error.message)}
-  cLoc=null;toastMsg('✅ Cadastro feito! Boas compras.');go(items().length?'cart':'loja');
+  cLoc=null;ENT.pronto=true;ENT.p=0;go('eu');
 }
 function irConf(fl){if(fl.some(x=>/confirmar no mapa/.test(x))){confBox();const b=$('#mconf');if(b)b.scrollIntoView({behavior:'smooth',block:'center'})}}
 async function saveMe(){
