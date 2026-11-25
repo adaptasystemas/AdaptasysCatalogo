@@ -1333,7 +1333,7 @@ async function checaOutroLocal(){
 async function entregaAqui(){
   const l=window._outroLoc;if(!l)return;$('#outro').innerHTML='<p class="mu">🔎 Buscando o endereço…</p>';
   let r={};try{r=await endSug(l.lat,l.lng)}catch(e){}
-  co.loc={...l,ok:l.acc<=30};co.addr=(r.addr||'')+(r.addr?' (confira e coloque o número)':'');
+  PED.outro=true;co.loc={...l,ok:l.acc<=30};co.addr=(r.addr||'')+(r.addr?' (confira e coloque o número)':'');
   if(r.bai){const m=(EMP.taxas||[]).find(t=>norm(t.b)==norm(r.bai2||r.bai));if(m)co.bai=m.b}
   render();toastMsg('📍 Entrega neste local. Confira o endereço abaixo e acrescente o número da casa.');
 }
@@ -1768,6 +1768,86 @@ setInterval(()=>{const b=$('#horb');if(b&&(tab=='loja'||tab=='cart')){const t=do
 /* carrinho: fora do horário mostra o aviso e não deixa enviar */
 const _vcHor=vCart;
 vCart=function(){let h=_vcHor();if(CUST&&me&&me.loc&&items().length){h=h.replace('<label>Endereço de entrega</label>','<div id="outro"></div><label>Endereço de entrega</label>');setTimeout(checaOutroLocal,400)}if(CUST&&items().length){const st=horSt(EMP.hor);if(!st.aberto)h=horBarra()+`<div class="card horfe">${esc(horMsg(st))}</div>`+h.replace('onclick="finishC()"','onclick="finishC()" disabled style="opacity:.5"')}return h};
+/* ===== PEDIDO EM PASSOS (cliente): uma pergunta por tela, botões grandes ===== */
+const PED={p:0,outro:false};
+(()=>{const st=document.createElement('style');st.textContent='.opc{display:flex;align-items:center;gap:12px;border:2px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:10px;background:var(--card);font-size:16px;width:100%;text-align:left;color:var(--tx);cursor:pointer;font-family:inherit}.opc.sel{border-color:var(--ac);background:var(--ac2)}.opc .ic{font-size:26px;line-height:1}.opc b{display:block}.opc small{display:block;color:var(--mu);font-size:13px;font-weight:400;margin-top:2px}.pbar{display:flex;gap:5px;margin:2px 0 6px}.pbar i{flex:1;height:6px;border-radius:3px;background:var(--bd)}.pbar i.on{background:var(--ac)}.ptit{font-size:13px;color:var(--mu);margin-bottom:6px}.pq{display:flex;align-items:center;gap:10px}.pq button{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--ac);background:var(--card);color:var(--ac);font-size:22px;font-weight:800}.pbig{font-size:19px;font-weight:800;margin:6px 0 12px}';document.head.appendChild(st)})();
+const pedSteps=()=>co.ent=='retirada'?[0,1,3,4]:[0,1,2,3,4];
+function pedIr(n){PED.p=n;render();window.scrollTo(0,0)}
+function pedAchaBai(b){const m=(EMP.taxas||[]).find(x=>bkey(x.b)==bkey(b));return m?m.b:(padOn()?'__outro':'')}
+function pedUsarSalvo(){
+  if(!me)return;co.addr=me.a||composeAddr(me);co.loc=me.loc||null;if(me.ref&&!co.obs)co.obs=me.ref;
+  if(taxaAtiva()){co.bai=pedAchaBai(me.bai);if(taxaDe(co.bai)==null){PED.outro=true;toastMsg('A loja não tem taxa para o bairro "'+(me.bai||'')+'". Escolha o bairro da entrega abaixo.');return render()}}
+  pedProx(true);
+}
+function pedProx(ok){
+  const l=pedSteps(),i=l.indexOf(PED.p);
+  if(PED.p==2&&!ok){
+    if(!String(co.addr||'').trim())return alert('Informe o endereço de entrega.');
+    if(taxaAtiva()&&taxaDe(co.bai)==null)return alert('Escolha o bairro da entrega.');
+  }
+  pedIr(l[Math.min(l.length-1,i+1)]);
+}
+function pedVolta(){const l=pedSteps(),i=l.indexOf(PED.p);pedIr(l[Math.max(0,i-1)])}
+async function pedGps(){
+  toastMsg('📡 Procurando onde você está…');
+  const l=await locRapida(15000);
+  if(!l)return toastMsg('Não achei sua localização agora. Digite o endereço abaixo.');
+  window._outroLoc=l;await entregaAqui();
+}
+function pedPayOpts(){
+  return [...(EMP.mpApp?[['Online','💳',EMP.ipApp?'Pagar agora com Mercado Pago':'Pagar agora pelo app','Pix ou cartão, aqui no celular']]:[]),
+    ...(EMP.ipApp?[['OnlineIP','🟢',EMP.mpApp?'Pagar agora com InfinitePay':'Pagar agora pelo app','Pix ou cartão até 12x']]:[]),
+    ...(EMP.pix?[['Pix','💠','Pix','O código aparece depois de enviar']]:[]),
+    ['Dinheiro','💵','Dinheiro na entrega','Pergunta se precisa de troco'],['Cartão','💳','Cartão na entrega','Levamos a maquininha']];
+}
+function vPedido(){
+  const st=horSt(EMP.hor),fechado=!st.aberto,l=pedSteps(),i=Math.max(0,l.indexOf(PED.p));if(l.indexOf(PED.p)<0)PED.p=0;
+  const topo=`<div class="pbar">${l.map((x,k)=>`<i class="${k<=i?'on':''}"></i>`).join('')}</div><div class="ptit">Passo ${i+1} de ${l.length}</div>`;
+  const voltar=i>0?`<button class="b s w" style="margin-top:8px" onclick="pedVolta()">← Voltar</button>`:'';
+  const aviso=fechado?horBarra()+`<div class="card horfe">${esc(horMsg(st))}</div>`:'';
+  let h='';
+  if(PED.p==0){
+    h=`<div class="pbig">Seu pedido</div>`+items().map(x=>`<div class="card row"><div class="it">${th(x.p)}<b>${esc(x.p.n)}</b><div class="mu">${R(x.p.p)} × ${x.qt} = ${R(x.p.p*x.qt)}</div></div><div class="pq"><button onclick="add('${x.p.id}',-1)" aria-label="Menos">−</button><b>${x.qt}</b><button onclick="add('${x.p.id}',1)" aria-label="Mais">+</button></div></div>`).join('')
+      +`<div class="row" style="margin:10px 2px;font-size:18px"><span>Total dos produtos</span><b>${R(total())}</b></div><button class="b w" onclick="pedProx()">Continuar</button><button class="b s w" style="margin-top:8px" onclick="go('loja')">+ Adicionar mais produtos</button>`;
+  }else if(PED.p==1){
+    h=`<div class="pbig">Como você quer receber?</div>
+    <button class="opc ${co.ent!='retirada'?'sel':''}" onclick="co.ent='entrega';pedProx(true)"><span class="ic">🛵</span><span><b>Entregar em casa</b><small>${taxaAtiva()?'A taxa depende do bairro':'Sem taxa de entrega'}</small></span></button>
+    <button class="opc ${co.ent=='retirada'?'sel':''}" onclick="co.ent='retirada';pedProx(true)"><span class="ic">🏪</span><span><b>Retirar na loja</b><small>Sem taxa</small></span></button>`;
+  }else if(PED.p==2){
+    const tem=me&&me.rua&&me.num,salvo=me&&(me.a||composeAddr(me));
+    if(tem&&!PED.outro){
+      h=`<div class="pbig">Entregar neste endereço?</div><div id="outro"></div><div class="opc sel" style="cursor:default"><span class="ic">📍</span><span><b>${esc(salvo)}</b>${me.ref?`<small>${esc(me.ref)}</small>`:''}</span></div>
+      <button class="b w" onclick="pedUsarSalvo()">Sim, é este</button><button class="b s w" style="margin-top:8px" onclick="PED.outro=true;render()">Estou em outro lugar</button>`;
+      setTimeout(checaOutroLocal,400);
+    }else{
+      const bs=(EMP.taxas||[]).slice().sort((a,b)=>a.b.localeCompare(b.b,'pt-BR')).map(t=>`<option value="${esc(t.b)}" ${co.bai===t.b?'selected':''}>${esc(t.b)} — ${R(t.v)}</option>`).join('')+(padOn()?`<option value="__outro" ${co.bai==='__outro'?'selected':''}>Outros bairros — ${R(+EMP.taxaPad)}</option>`:'');
+      h=`<div class="pbig">Onde entregar?</div><div id="outro"></div><button class="b w" onclick="pedGps()">📍 Usar minha localização</button><p class="mu" style="margin:6px 0 10px;font-size:13px">O celular acha a rua e o bairro. Você só confere e digita o número.</p>
+      <label>Endereço (rua, número e bairro)</label><textarea rows="2" oninput="co.addr=this.value">${esc(co.addr)}</textarea>
+      ${taxaAtiva()?`<label>Bairro da entrega</label><select onchange="co.bai=this.value;render()"><option value="">Escolha o bairro</option>${bs}</select>${co.bai&&taxaDe(co.bai)==null?'<p class="mu">Não entregamos neste bairro.</p>':''}`:''}
+      <label>Ponto de referência <small class="mu">(opcional)</small></label><input value="${esc(co.obs)}" oninput="co.obs=this.value" placeholder="Ex.: portão azul">
+      <button class="b w" style="margin-top:10px" onclick="pedProx()">Continuar</button>${tem?`<button class="b s w" style="margin-top:8px" onclick="PED.outro=false;pedUsarSalvo()">Usar meu endereço salvo</button>`:''}`;
+    }
+  }else if(PED.p==3){
+    const o=pedPayOpts();if(!o.some(x=>x[0]==co.pay))co.pay=o[0][0];
+    h=`<div class="pbig">Como você vai pagar?</div>`+o.map(([v,ic,t,d])=>`<button class="opc ${co.pay==v?'sel':''}" onclick="co.pay='${v}';${v=='Dinheiro'?'render()':'pedProx(true)'}"><span class="ic">${ic}</span><span><b>${t}</b><small>${d}</small></span></button>`).join('')
+      +(co.pay=='Dinheiro'?`<div class="card"><b>Precisa de troco?</b><p class="mu" style="margin:4px 0 8px">Se vai pagar com nota maior, digite quanto. Se não precisa, é só continuar.</p><input type="number" inputmode="decimal" min="0" step="0.01" placeholder="Troco para quanto? (opcional)" value="${esc(co.cash)}" oninput="co.cash=this.value;trocoTxt()"><p id="tr" class="mu"></p><button class="b w" onclick="pedProx(true)">Continuar</button></div>`:'');
+    if(co.pay=='Dinheiro')setTimeout(trocoTxt,0);
+  }else{
+    const ent=co.ent=='retirada',pg=(pedPayOpts().find(x=>x[0]==co.pay)||[0,'',co.pay])[2],cash=parseFloat(co.cash)||0;
+    h=`<div class="pbig">Tudo certo?</div><div class="card">${items().map(x=>`<div class="row" style="font-size:15px"><span>${x.qt}× ${esc(x.p.n)}</span><span>${R(x.p.p*x.qt)}</span></div>`).join('')}
+      <div class="row" style="margin-top:8px;border-top:1px solid var(--bd);padding-top:8px"><span class="mu">Produtos</span><span>${R(total())}</span></div>
+      <div class="row"><span class="mu">Entrega</span><span>${ent?'retirada na loja':(taxaAtual()?R(taxaAtual()):'sem taxa')}</span></div>
+      <div class="row" style="font-size:19px;margin-top:4px"><b>Total</b><b>${R(totalFinal())}</b></div></div>
+      <div class="card" style="line-height:1.7"><div>${ent?'🏪 <b>Retirar na loja</b>':'📍 '+esc(co.addr)}</div><div>💳 ${esc(pg)}${co.pay=='Dinheiro'&&cash?' · troco para '+R(cash):''}</div></div>
+      <label>Alguma observação? <small class="mu">(opcional)</small></label><input value="${esc(co.obs)}" oninput="co.obs=this.value" placeholder="Ex.: tocar a campainha">
+      ${co.pay=='Dinheiro'&&cash&&cash<totalFinal()?'<p class="mu" style="color:var(--rd)">⚠️ O valor do troco é menor que o total.</p>':''}
+      <button class="b w" style="margin-top:12px;font-size:18px;padding:14px" onclick="finishC()" ${fechado?'disabled style="opacity:.5;margin-top:12px;font-size:18px;padding:14px"':''}>Enviar pedido</button><p class="mu" style="font-size:13px;text-align:center">Depois de enviar, você acompanha em Pedidos: Recebido, Aceito, Entregue.</p>`;
+  }
+  return topo+aviso+h+(PED.p==2&&PED.outro&&me&&me.rua?'':voltar);
+}
+const _vcPed=vCart;
+vCart=function(){if(!CUST||!items().length||bloqueado()||!me)return _vcPed();return vPedido()};
+{const _fc=finishC;finishC=async function(){const n=S.mine.length;await _fc();if(S.mine.length>n){PED.p=0;PED.outro=false}}}
 function txHtml(){
   return (EMP.taxas||[]).map((t,i)=>`<div class="g2tx"><input value="${esc(t.b)}" placeholder="Nome do bairro" oninput="EMP.taxas[${i}].b=this.value"><input type="number" inputmode="decimal" min="0" step="0.5" value="${t.v}" placeholder="R$" oninput="EMP.taxas[${i}].v=parseFloat(this.value)||0"><button class="b rd" style="padding:0" onclick="txDel(${i})" aria-label="Remover bairro">✕</button></div>`).join('')||'<p class="mu">Nenhum bairro cadastrado: a entrega não tem taxa.</p>';
 }
